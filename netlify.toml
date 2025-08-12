@@ -1,5 +1,6 @@
+# Configuração para encontrar as funções do Node.js corretamente
 [functions]
-  included_files = ["node_modules/**"]
+  node_bundler = "esbuild"
 
 # Configuração para a função agendada que roda a cada minuto
 [functions.cron]
