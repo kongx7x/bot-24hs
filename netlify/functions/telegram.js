@@ -213,24 +213,49 @@ bot.command('list', async (ctx) => {
 // SEÇÃO DE AÇÕES (BOTÕES)
 // =================================================================================
 
-bot.action(/select_group:(.+)/, (ctx) => {
-    ctx.session.selectedChatId = parseInt(ctx.match[1], 10);
-    db.collection('user_groups').where('chat_id', '==', ctx.session.selectedChatId).limit(1).get().then(s => {
-        if (!s.empty) {
-            ctx.session.selectedChatTitle = s.docs[0].data().chat_title;
-            console.log(`[Action] Usuário ${ctx.from.id} selecionou o grupo ${ctx.session.selectedChatTitle} (${ctx.session.selectedChatId})`);
-            ctx.editMessageText(`✅ Grupo '${ctx.session.selectedChatTitle}' selecionado. Use /list para gerenciar.`);
+// ***** CÓDIGO CORRIGIDO ABAIXO *****
+bot.action(/select_group:(.+)/, async (ctx) => {
+    try {
+        const chatId = parseInt(ctx.match[1], 10);
+        ctx.session.selectedChatId = chatId;
+
+        const snapshot = await db.collection('user_groups')
+            .where('user_id', '==', ctx.from.id)
+            .where('chat_id', '==', chatId)
+            .limit(1)
+            .get();
+
+        if (!snapshot.empty) {
+            ctx.session.selectedChatTitle = snapshot.docs[0].data().chat_title;
+            console.log(`[Action] Usuário ${ctx.from.id} selecionou o grupo ${ctx.session.selectedChatTitle} (${chatId})`);
+            await ctx.editMessageText(`✅ Grupo '${ctx.session.selectedChatTitle}' selecionado. Use /list para gerenciar.`);
+        } else {
+            await ctx.answerCbQuery("Grupo não encontrado.", { show_alert: true });
+            await ctx.editMessageText("Este grupo não foi encontrado ou não está associado a você.");
         }
-    });
+    } catch (error) {
+        console.error("Erro na action select_group:", error);
+        await ctx.answerCbQuery("Ocorreu um erro ao selecionar o grupo.", { show_alert: true });
+    }
 });
 
 bot.action(/toggle:(.+)/, async (ctx) => {
     const docId = ctx.match[1];
     const docRef = db.collection('scheduled_posts').doc(docId);
-    await docRef.update({ is_active: !ctx.callbackQuery.data.startsWith('toggle:true') });
-    const isNowActive = !ctx.callbackQuery.data.startsWith('toggle:true');
+    const doc = await docRef.get();
+    if (!doc.exists) return ctx.answerCbQuery("Agendamento não encontrado.");
+    
+    const post = doc.data();
+    const isNowActive = !post.is_active;
+
+    await docRef.update({ 
+        is_active: isNowActive,
+        // Zera o timestamp ao ativar para garantir que ele rode no próximo ciclo do cron
+        last_run_timestamp: 0 
+    });
+
     await ctx.answerCbQuery(isNowActive ? "Agendamento ativado." : "Agendamento pausado.");
-    console.log(`[Action] Job ${docId} ${isNowActive ? 'ativado' : 'pausado'} pelo usuário ${ctx.from.id}`);
+    console.log(`[Action] Agendamento ${docId} ${isNowActive ? 'ativado' : 'pausado'} pelo usuário ${ctx.from.id}`);
 });
 
 bot.action(/add_content:(.+)/, async (ctx) => {
@@ -253,33 +278,26 @@ bot.action(/delete:(.+)/, async (ctx) => {
 
 bot.action(/wizard_start_now:(.+)/, async (ctx) => {
     const docId = ctx.match[1];
-    await db.collection('scheduled_posts').doc(docId).update({ is_active: true });
-    await ctx.editMessageText("✅ Agendamento iniciado com sucesso! Os posts começarão em breve.");
-    console.log(`[Wizard] Job ${docId} iniciado via assistente pelo usuário ${ctx.from.id}`);
+    await db.collection('scheduled_posts').doc(docId).update({ 
+        is_active: true,
+        last_run_timestamp: 0
+    });
+    await ctx.editMessageText("✅ Agendamento ativado! Os posts começarão a ser enviados em breve (a verificação ocorre a cada minuto).");
+    console.log(`[Wizard] Agendamento ${docId} ativado via assistente pelo usuário ${ctx.from.id}`);
 });
 
-bot.action(/wizard_start_later:(.+)/, (ctx) => ctx.editMessageText("✅ Ok! Agendamento salvo. Use /list para iniciá-lo."));
+bot.action(/wizard_start_later:(.+)/, (ctx) => ctx.editMessageText("✅ Ok! Agendamento salvo. Use /list para ativá-lo."));
 
 // =================================================================================
 // SEÇÃO DO HANDLER PRINCIPAL DO NETLIFY
 // =================================================================================
 
 exports.handler = async (event) => {
-    console.log("--- INÍCIO DA EXECUÇÃO DO HANDLER ---");
-    console.log("Evento recebido:", event.body);
-
-    if (!TELEGRAM_TOKEN || !FIREBASE_CREDS_JSON_STR) {
-        console.error("ERRO FATAL: Variáveis de ambiente não estão definidas.");
-        return { statusCode: 500, body: "Configuração do servidor incompleta." };
-    }
-
     try {
         await bot.handleUpdate(JSON.parse(event.body));
-        console.log("--- FIM DA EXECUÇÃO DO HANDLER (Sucesso) ---");
         return { statusCode: 200, body: "" };
     } catch (e) {
         console.error("ERRO AO PROCESSAR O UPDATE:", e);
-        console.log("--- FIM DA EXECUÇÃO DO HANDLER (Erro) ---");
         return { statusCode: 400, body: "Erro no processamento." };
     }
 };
