@@ -1,0 +1,6 @@
+[functions]
+  included_files = ["node_modules/**"]
+
+# Configuração para a função agendada que roda a cada minuto
+[functions.cron]
+  schedule = "* * * * *"
